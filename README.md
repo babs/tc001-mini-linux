@@ -4,7 +4,7 @@ A desktop viewer for the TOPDON TC001 Mini thermal camera on Linux, with no vend
 
 ## Status
 
-Proof of concept, kept local. Live view, controls, saved settings, photo and video work; window polish (dark theme, resizable window) is next. The plan and acceptance criteria are in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
+Proof of concept, kept local. Live view, controls, saved settings, photo and video work, in a resizable dark window. The plan and acceptance criteria are in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
 
 ## Usage
 

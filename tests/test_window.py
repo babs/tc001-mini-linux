@@ -18,7 +18,17 @@ import pytest
 from tc001_linux import settings as cfg
 from tc001_linux.capture import capture_name
 from tc001_linux.frame import FRAME, parse
-from tc001_linux.picture import BAR_MARGIN, BAR_TOP, BAR_WIDTH, WIDTH, bar_row, format_celsius, readout_panel
+from tc001_linux.picture import (
+    BAR_MARGIN,
+    BAR_TOP,
+    BAR_WIDTH,
+    HEIGHT,
+    WIDTH,
+    bar_row,
+    format_celsius,
+    readout_texts,
+)
+from tc001_linux.process import Readouts
 from tc001_linux.settings import Settings
 from tc001_linux.source import CameraSource, OnFrame, ReplaySource, Source
 
@@ -26,6 +36,7 @@ from .conftest import CAPTURE, decode_png, fake_exe, fake_v4l2, ffprobe, png_chu
 
 try:
     import tkinter
+    import tkinter.ttk
 except ImportError:
     if os.environ.get("CI"):
         raise
@@ -78,7 +89,7 @@ def pixels(ppm: bytes) -> bytes:
 def test_window_on_capture_001_AC4_AC5_AC9(xvfb: None, tmp_path: Path) -> None:
     import tkinter as tk
 
-    from tc001_linux.window import App, ppm
+    from tc001_linux.window import App
 
     root = tk.Tk()
     path = tmp_path / "settings.json"
@@ -98,8 +109,11 @@ def test_window_on_capture_001_AC4_AC5_AC9(xvfb: None, tmp_path: Path) -> None:
         r = shot.readouts
         badges = (r.cold.celsius, r.hot.celsius, r.centre)
         assert app.readout_texts == tuple(format_celsius(v) for v in badges)
-        assert pixels(app.panel_photo.data(format="ppm")) == readout_panel(r).tobytes()
-        assert pixels(app.photo.data(format="ppm")) == pixels(shot.picture)
+        values = (app.min_label, app.max_label, app.centre_label)
+        assert tuple(str(v.cget("text")) for v in values) == app.readout_texts
+        assert [str(v.cget("foreground")) for v in values] == ["#00c8ff", "#ff4d6d", "#ffffff"]
+        assert app.readout_fonts[2].cget("size") < app.readout_fonts[1].cget("size") < 0  # px: Center larger
+        assert pixels(app.photo.data(format="ppm")) == shot.picture.tobytes()
 
         first, shown = app.photo.data(format="ppm"), app.shown
         # The picture updates.
@@ -123,7 +137,6 @@ def test_window_on_capture_001_AC4_AC5_AC9(xvfb: None, tmp_path: Path) -> None:
         assert app.smoothing.get() == pytest.approx(0.6)
         assert json.loads(path.read_text())["smoothing"] == pytest.approx(0.6)
         assert int(root.winfo_width()) == WIDTH
-        assert len(ppm(readout_panel(None))) > 0
     finally:
         app.quit()
     assert sources and not any(s.alive for s in sources)
@@ -155,6 +168,7 @@ def test_window_loses_and_finds_the_source_001_AC8(xvfb: None, tmp_path: Path) -
         root.update()
         assert app.message.winfo_ismapped() and app.message.cget("text") == DISCONNECTED
         assert app.readout_texts is None and not any(pixels(app.photo.data(format="ppm")))
+        assert app.centre_label.cget("text") == ""
         shown = app.shown
         for _ in range(150):  # 1.5 s: polled, nothing there yet
             root.update()
@@ -264,7 +278,7 @@ def test_slider_drag_saves_once_001_AC5(xvfb: None, tmp_path: Path, monkeypatch:
 def test_fast_drag_saves_the_last_value_001_AC5(
     xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Motions and release queued together: -command runs at idle, after the release handler."""
+    """Motions and release queued together: the release saves the last value, once."""
     from tc001_linux.window import App
 
     saves: list[Settings] = []
@@ -347,7 +361,7 @@ def test_fixed_range_lock_001_AC5(xvfb: None, tmp_path: Path) -> None:
     root = tkinter.Tk()
     app = App(root, replay, Settings(), tmp_path / "settings.json", fixed=(0.0, 50.0))
     try:
-        assert app.lock_button.cget("text") == "Fixed range" and app.lock_button.cget("state") == "disabled"
+        assert app.lock_button.cget("text") == "Fixed range" and app.lock_button.instate(["disabled"])
         app.act("lock")
         assert not app.proc.locked and app.lock_button.cget("text") == "Fixed range"
     finally:
@@ -383,12 +397,11 @@ def test_readouts_refresh_about_5_hz_001_AC4(
 
     refreshed: list[float] = []
 
-    def counting(r: object) -> object:
-        if r is not None:
-            refreshed.append(time.monotonic())
-        return readout_panel(r)  # type: ignore[arg-type]
+    def counting(r: Readouts) -> tuple[str, str, str]:
+        refreshed.append(time.monotonic())
+        return readout_texts(r)
 
-    monkeypatch.setattr(window, "readout_panel", counting)
+    monkeypatch.setattr(window, "readout_texts", counting)
     root = tkinter.Tk()
     app = App(root, replay, Settings(), tmp_path / "settings.json")
     try:
@@ -526,7 +539,7 @@ def test_photo_001_AC6(xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPat
         assert (kind, keyword) == (b"tEXt", b"tc001")
         meta = json.loads(body.decode("latin-1"))
         # The frame of the .bin: same picture, and its readouts are the JSON's.
-        frame = [sh for sh in shots if sh.raw == raw and pixels(sh.picture) == img.tobytes()]
+        frame = [sh for sh in shots if sh.raw == raw and sh.picture.tobytes() == img.tobytes()]
         assert frame, "no frame with this raw and this picture"
         r = frame[0].readouts
         assert meta == {
@@ -580,7 +593,8 @@ def start_recording(app: object, root: tkinter.Tk) -> float:
     from tc001_linux.window import RED
 
     button = app.record_button  # type: ignore[attr-defined]
-    assert button.cget("text") == "Stop" and button.cget("fg") == RED
+    style = str(button.cget("style"))
+    assert button.cget("text") == "Stop" and tkinter.ttk.Style(root).lookup(style, "foreground") == RED
     return time.monotonic()
 
 
@@ -606,7 +620,7 @@ def test_record_stop_001_AC7(xvfb: None, tmp_path: Path, monkeypatch: pytest.Mon
         app.record_button.invoke()  # Stop
         wall = time.monotonic() - t0
         assert app.recorder is None and app.record_button.cget("text") == "Record"
-        assert app.record_button.cget("fg") == app.photo_button.cget("fg")
+        assert app.record_button.cget("style") == "TButton"
         name = saved(app, root, "Video saved: ")
         assert rec.path.name == name and list((tmp_path / "vids" / "TC001").iterdir()) == [rec.path]
         video_check(rec.path, wall)
@@ -740,13 +754,142 @@ def test_signal_finalises_the_recording_001_AC7(
     video_check(videos[0], times[1] - times[0])
 
 
-def test_xft_fonts_001_AC11(xvfb: None) -> None:
-    """The project runs on the system Python, whose Tk draws anti-aliased (Xft) fonts; uv's builds do not."""
+def test_xft_fonts_and_dark_theme_001_AC11(xvfb: None, tmp_path: Path) -> None:
+    """System Python's Tk draws anti-aliased (Xft) fonts, uv's builds do not; ttk in DejaVu, dark."""
+    from tkinter import font as tkfont
+
+    from tc001_linux.window import BG, BUTTON_BG, App
+
     root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
     try:
         assert root.tk.call("::tk::pkgconfig", "get", "fontsystem") == "xft"
+        style = tkinter.ttk.Style(root)
+        assert style.theme_use() == "clam"
+        for widget in (app.photo_button, app.lock_button, app.status, app.smoothing_value):
+            assert isinstance(widget, tkinter.ttk.Widget)
+            name = style.lookup(widget.winfo_class(), "font")
+            assert tkfont.nametofont(name, root).actual("family") == "DejaVu Sans", widget
+        assert {f.actual("family") for f in app.readout_fonts} == {"DejaVu Sans Mono"}
+        assert style.lookup("TButton", "background") == BUTTON_BG and style.lookup(".", "background") == BG
+        assert isinstance(app.scale, tkinter.ttk.Scale) and app.smoothing_value.cget("text") == "0.50"
     finally:
-        root.destroy()
+        app.quit()
+
+
+def settle(app: object, root: tkinter.Tk, w: int, h: int) -> None:
+    """Resizes the window and waits for the debounced layout."""
+    root.geometry(f"{w}x{h}")
+    pump(root, lambda: (root.winfo_width(), root.winfo_height()) == (w, h))
+    pump(root, lambda: app._layout_id is None)  # type: ignore[attr-defined]
+    root.update()
+
+
+def box(widget: tkinter.Misc) -> tuple[int, int, int, int]:
+    """x0, y0, x1, y1 in the toplevel."""
+    top = widget.winfo_toplevel()
+    x, y = widget.winfo_rootx() - top.winfo_rootx(), widget.winfo_rooty() - top.winfo_rooty()
+    return x, y, x + widget.winfo_width(), y + widget.winfo_height()
+
+
+@pytest.mark.parametrize(("w", "h"), [(600, 700), (1200, 1400), (1600, 900)])
+def test_resized_window_scales_the_picture_001_AC11(xvfb: None, tmp_path: Path, w: int, h: int) -> None:
+    from tc001_linux.window import READOUT_PX, App
+
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    try:
+        pump(root, lambda: app.readout_texts is not None)
+        natural = app.photo_button.winfo_height()
+        settle(app, root, w, h)
+        shown = app.shown
+        pump(root, lambda: app.shown > shown + 2)
+        pw, ph = app.photo.width(), app.photo.height()
+        assert (app.picture.winfo_width(), app.picture.winfo_height()) == (pw, ph)
+        assert abs(ph * WIDTH - pw * HEIGHT) <= WIDTH  # 768:832 within 1 px of height
+        x0, y0, x1, y1 = box(app.picture)
+        assert 0 <= x0 and x1 <= w and 0 <= y0 and abs(x0 + x1 - w) <= 1  # inside, centred
+        # Fills the room it has: limited by the width or by the height left above the readouts.
+        rx0, ry0, rx1, ry1 = box(app.readouts)
+        assert y1 <= ry0 and (pw == w or ry0 - y1 <= 1)
+        assert abs(rx1 - rx0 - pw) <= 1  # readouts as wide as the picture
+        scale = pw / WIDTH
+        for f, px in zip(app.readout_fonts, READOUT_PX, strict=True):
+            assert abs(-f.cget("size") - px * scale) <= 1
+        assert app.centre_label.winfo_ismapped() and app.centre_label.cget("text")
+        for button in (app.photo_button, app.record_button, app.palette_button, app.mirror_button):
+            bx0, by0, bx1, by1 = box(button)
+            assert button.winfo_ismapped() and ry1 <= by0 and by1 <= h and by1 - by0 == natural
+        assert box(app.mirror_button)[2] >= w - 4 and box(app.palette_button)[0] <= 4  # full width
+        assert box(app.scale)[3] <= h
+        # Nearest neighbour of the composed picture.
+        picture = app._shown_picture
+        assert picture is not None
+        for x, y in ((0, 0), (pw - 1, ph - 1), (pw // 2, ph // 3)):
+            want = tuple(int(c) for c in picture[y * HEIGHT // ph, x * WIDTH // pw])
+            assert tuple(app.photo.get(x, y)) == want
+    finally:
+        app.quit()
+
+
+def test_resampled_frame_time_001_AC11(xvfb: None, tmp_path: Path) -> None:
+    """The UI path (resample, PPM, put) at a large size stays well inside a 40 ms frame; --debug shows it."""
+    from tc001_linux.window import App
+
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json", debug=True)
+    debug = app.debug
+    assert debug is not None
+    try:
+        settle(app, root, 1200, 1400)
+        pw, ph = app.photo.width(), app.photo.height()
+        assert pw > WIDTH  # upscaled: the map is in use
+        texts: list[str] = []
+
+        def sampled() -> bool:
+            text = str(debug.cget("text"))
+            if f"at {pw}x{ph}" in text and (not texts or text != texts[-1]):
+                texts.append(text)  # one per DEBUG_PERIOD
+            return len(texts) >= 3
+
+        pump(root, sampled)
+        samples = sorted(float(text.split("ui ")[1].split(" ms")[0]) for text in texts)
+        assert samples[1] < 35, texts  # median, loose for CI: about 15 ms on a desktop
+    finally:
+        app.quit()
+
+
+def test_captures_stay_full_size_when_resized_001_AC11(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A photo and a recording taken while the window is resized are still 768 x 832."""
+    from tc001_linux.window import App
+
+    monkeypatch.setenv("XDG_PICTURES_DIR", str(tmp_path / "pics"))
+    monkeypatch.setenv("XDG_VIDEOS_DIR", str(tmp_path / "vids"))
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    try:
+        settle(app, root, 600, 700)
+        t0 = start_recording(app, root)
+        rec = app.recorder
+        assert rec is not None
+        settle(app, root, 1200, 1400)
+        app.act("photo")
+        name = saved(app, root, "Photo saved: ")
+        assert decode_png((tmp_path / "pics" / "TC001" / f"{name}.png").read_bytes()).shape == (
+            HEIGHT,
+            WIDTH,
+            3,
+        )
+        settle(app, root, 1600, 900)
+        pump(root, lambda: time.monotonic() - t0 >= 2.0)
+        app.act("record")
+        wall = time.monotonic() - t0
+        saved(app, root, "Video saved: ")
+        video_check(rec.path, wall)
+    finally:
+        app.quit()
 
 
 def test_quit_leaves_no_pending_tick(xvfb: None, tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:

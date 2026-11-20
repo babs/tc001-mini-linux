@@ -28,8 +28,6 @@ HOT: Color = (0xFF, 0x4D, 0x6D)
 COLD: Color = (0x00, 0xC8, 0xFF)
 CENTRE: Color = (0xFF, 0xFF, 0xFF)
 PANEL = 24
-# Window readouts: titles, Min / Max values, Center value.
-LABEL_SIZE, PAIR_SIZE, CENTRE_SIZE = FONT_SIZE, 6 * SCALE, 8 * SCALE
 UNIT = "°C"
 LONG_MAX = 2**63 - 1
 
@@ -147,24 +145,3 @@ def compose(shown: Plane, r: Readouts, palette: str, strength: float, rotate: in
 def readout_texts(r: Readouts) -> tuple[str, str, str]:
     """Min, Max, Center as the window shows them: the cold, hot and centre badge texts of the picture."""
     return format_celsius(r.min), format_celsius(r.max), format_celsius(r.centre)
-
-
-def readout_panel(r: Readouts | None) -> Image:
-    """Window band under the picture: Min | Max, then Center in larger type; blank if r is None."""
-    fl, fp, fc = font(LABEL_SIZE), font(PAIR_SIZE), font(CENTRE_SIZE)
-    pair_y = SCALE
-    centre_y = pair_y + fl.line + fp.line + SCALE
-    out = np.zeros((centre_y + fl.line + fc.line + SCALE, SIDE, 3), np.uint8)
-    if r is None:
-        return out
-
-    def centred(cx: int, baseline: int, text: str, size: int, color: Color) -> None:
-        draw_text(out, cx - text_width(text, size) // 2, baseline, text, size, color)
-
-    lo, hi, centre = readout_texts(r)
-    for cx, title, value, color in ((SIDE // 4, "Min", lo, COLD), (3 * SIDE // 4, "Max", hi, HOT)):
-        centred(cx, pair_y + fl.ascent, title, LABEL_SIZE, color)
-        centred(cx, pair_y + fl.line + fp.ascent, value, PAIR_SIZE, color)
-    centred(SIDE // 2, centre_y + fl.ascent, "Center", LABEL_SIZE, CENTRE)
-    centred(SIDE // 2, centre_y + fl.line + fc.ascent, centre, CENTRE_SIZE, CENTRE)
-    return out

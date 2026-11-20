@@ -11,15 +11,12 @@ from tc001_linux.picture import (
     BAR_TOP,
     BAR_WIDTH,
     CENTRE,
-    CENTRE_SIZE,
     COLD,
     FONT_SIZE,
     HALF,
     HEIGHT,
     HOT,
-    LABEL_SIZE,
     OUTLINE,
-    PAIR_SIZE,
     PANEL,
     SCALE,
     SIDE,
@@ -29,7 +26,6 @@ from tc001_linux.picture import (
     compose,
     format_celsius,
     marker_label_x,
-    readout_panel,
     readout_texts,
     scale_labels,
 )
@@ -373,18 +369,10 @@ def test_png_roundtrip(capture: bytes) -> None:
     assert np.array_equal(decode_png(encode_png(pic)), pic)
 
 
-def test_readout_panel_001_AC4() -> None:
-    """Min / Max / Center are the cold / hot / centre badge values, each in its colour; Center the largest."""
+def test_readout_texts_001_AC4() -> None:
+    """Min / Max / Center are the cold / hot / centre badge values."""
     r = Readouts(Spot(3, 4, 41.25), Spot(5, 6, -3.25), 24.04, 0.0, 50.0, False)
     assert readout_texts(r) == ("-3.3", "41.3", "24.0")
-    blank, panel = readout_panel(None), readout_panel(r)
-    assert blank.shape == panel.shape and blank.shape[1] == WIDTH and not blank.any()
-    half = WIDTH // 2
-    for color, cols in ((COLD, slice(0, half)), (HOT, slice(half, WIDTH)), (CENTRE, slice(0, WIDTH))):
-        assert (panel[:, cols] == color).all(axis=-1).any(), color
-    assert not (panel[:, half:] == COLD).all(axis=-1).any()
-    assert not (panel[:, :half] == HOT).all(axis=-1).any()
-    assert CENTRE_SIZE > PAIR_SIZE > LABEL_SIZE
     # Swapped spots swap the numbers: Min follows the cold marker, not the smaller value.
     swapped = Readouts(Spot(0, 0, 1.0), Spot(0, 0, 2.0), 0.0, 0.0, 1.0, False)
     assert readout_texts(swapped)[:2] == ("2.0", "1.0")
