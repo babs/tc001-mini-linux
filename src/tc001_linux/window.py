@@ -1,8 +1,11 @@
 """Tk window: live picture, Min / Max / Center readouts, controls and shortcuts, camera loss and return."""
 
 import dataclasses
+import math
+import queue
 import signal
 import sys
+import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
@@ -11,6 +14,7 @@ from typing import NamedTuple
 
 from tc001_linux import Image, Plane
 from tc001_linux import settings as cfg
+from tc001_linux.capture import Recorder, capture_name, media_dir, photo_json, save_photo
 from tc001_linux.picture import (
     CENTRE_SIZE,
     HEIGHT,
@@ -21,6 +25,7 @@ from tc001_linux.picture import (
     readout_panel,
     readout_texts,
 )
+from tc001_linux.png import encode_png
 from tc001_linux.process import Processor, Readouts
 from tc001_linux.source import Mailbox, OnFrame, Source, Step, Watch
 from tc001_linux.text import font
@@ -29,7 +34,9 @@ TITLE = "TC001 Mini"
 TICK_MS = 10
 READOUT_PERIOD = 0.2  # ~5 Hz, like the Android app: steadier to read than every frame
 DEBUG_PERIOD = 1.0
-BG, BUTTON_BG, FG, DIM = "#000000", "#1e1e1e", "#ffffff", "#777777"
+STATUS_SECONDS = 4.0
+PHOTO_WAIT = 1.0  # a photo asked this long ago with no frame yet gets a status line
+BG, BUTTON_BG, FG, DIM, RED = "#000000", "#1e1e1e", "#ffffff", "#777777", "#ff3b30"
 UI_FONT = ("helvetica", 13)
 PALETTE_NAMES = {"ironbow": "Ironbow", "white-hot": "White hot", "black-hot": "Black hot"}
 WAITING, DISCONNECTED = "Waiting for the camera…", "Camera disconnected"
@@ -43,7 +50,7 @@ def ppm(img: Image) -> bytes:
 
 
 class Shot(NamedTuple):
-    """One processed frame: raw bytes (photo .bin, phase 3), its numbers and its picture as PPM."""
+    """One processed frame: raw bytes, its numbers and its picture as PPM."""
 
     raw: bytes
     readouts: Readouts
@@ -74,6 +81,12 @@ class App:
         self._errors: set[str] = set()  # source errors already printed
         self._ui_ms = 0.0
         self._fps_at, self._fps_frames = time.monotonic(), 0
+        self._photo = threading.Event()  # taken by the reader on the next frame
+        self.pictures, self.videos = media_dir("PICTURES"), media_dir("VIDEOS")  # xdg-user-dir runs once
+        self._photo_at = math.inf  # when the pending photo was asked, until its wait is reported
+        self.recorder: Recorder | None = None
+        self._statuses = queue.SimpleQueue[str]()  # from the photo and recorder threads
+        self._status_until = 0.0
 
         root.title(TITLE)
         root.configure(bg=BG)
@@ -89,7 +102,7 @@ class App:
         self.panel_photo = tk.PhotoImage(master=root, data=ppm(readout_panel(None)))
         tk.Label(root, image=self.panel_photo, bg=BG, bd=0, highlightthickness=0).pack()
 
-        def button(row: tk.Frame, text: str, cmd: Callable[[], None], enabled: bool = True) -> tk.Button:
+        def button(row: tk.Frame, text: str, cmd: Callable[[], None]) -> tk.Button:
             b = tk.Button(
                 row,
                 text=text,
@@ -103,7 +116,6 @@ class App:
                 relief="flat",
                 highlightthickness=0,
                 takefocus=False,
-                state="normal" if enabled else "disabled",
             )
             b.pack(side="left", expand=True, fill="x", padx=2, pady=2)
             return b
@@ -111,9 +123,8 @@ class App:
         rows = [tk.Frame(root, bg=BG) for _ in range(2)]
         for row in rows:
             row.pack(fill="x")
-        # Photo and Record arrive in phase 3.
-        button(rows[0], "Photo", lambda: None, enabled=False)
-        button(rows[0], "Record", lambda: None, enabled=False)
+        self.photo_button = button(rows[0], "Photo", lambda: self.act("photo"))
+        self.record_button = button(rows[0], "", lambda: self.act("record"))
         self.palette_button = button(rows[1], "", lambda: self.act("palette"))
         self.lock_button = button(rows[1], "", lambda: self.act("lock"))
         self.rotate_button = button(rows[1], "", lambda: self.act("rotate"))
@@ -140,21 +151,69 @@ class App:
         )
         self.scale.pack(side="left", fill="x", expand=True, padx=8)
         self.scale.bind("<ButtonRelease-1>", lambda e: self._released())
+        self.status = tk.Label(root, font=UI_FONT, fg=FG, bg=BG, anchor="w", padx=8)
+        self.status.pack(fill="x")
         self._label_controls()
 
         root.bind("<KeyPress>", lambda e: self.act(cfg.key_action(e.keysym) or ""))
         root.protocol("WM_DELETE_WINDOW", self.quit)
-        root.after(0, self._tick)
+        self._tick_id = root.after(0, self._tick)
 
     # Reader thread: every frame goes through the tracker, only the latest picture reaches the screen.
     def on_frame(self, raw: bytes, t: Plane) -> None:
         s = self.settings
         shown, r = self.proc.process(t, s.smoothing)
-        self.mailbox.put(Shot(raw, r, ppm(compose(shown, r, s.palette, s.smoothing, s.rotation, s.mirror))))
+        img = compose(shown, r, s.palette, s.smoothing, s.rotation, s.mirror)
+        self.mailbox.put(Shot(raw, r, ppm(img)))
+        if self._photo.is_set():
+            self._photo.clear()
+            args = (img, raw, r, s, time.time_ns() // 1_000_000)
+            threading.Thread(target=self._save_photo, args=args, name="photo").start()
+        if (rec := self.recorder) is not None:
+            rec.feed(img.tobytes())
+
+    # Photo thread: PNG encoding and disk writes stay off the Tk thread.
+    def _save_photo(self, img: Image, raw: bytes, r: Readouts, s: cfg.Settings, epoch_ms: int) -> None:
+        name = capture_name(epoch_ms)
+        try:
+            png = encode_png(img, ("tc001", photo_json(r, s, epoch_ms)))
+            save_photo(self.pictures, name, png, raw)
+            message = f"Photo saved: {name}"
+        except (OSError, ValueError) as e:
+            message = f"Photo failed: {e}"
+        self.report(message)
+
+    def report(self, text: str) -> None:
+        """Any thread: a status line for STATUS_SECONDS, also printed."""
+        self._statuses.put(text)
+        try:
+            print(f"tc001-mini-linux: {text}", file=sys.stderr)
+        except OSError:  # stderr gone (closed terminal): the status line still shows it
+            pass
+
+    def _record(self) -> None:
+        if self.recorder is not None:
+            self.recorder.stop()
+            self.recorder = None
+        elif self.source is not None:  # without a source no frame would ever come
+            try:
+                name = capture_name(time.time_ns() // 1_000_000)
+                self.recorder = Recorder(self.videos, name, self.report)
+            except OSError as e:
+                self.report(f"Video failed: {e}")
+        self._label_controls()
 
     def act(self, action: str) -> None:
         if action == "quit":
             self.quit()
+        elif action == "photo":
+            if self.source is None:
+                self.report("Photo failed: no frame")
+            else:
+                self._photo_at = time.monotonic()
+                self._photo.set()
+        elif action == "record":
+            self._record()
         elif action == "lock":
             if self.proc.fixed is None:
                 self.proc.locked = not self.proc.locked
@@ -199,10 +258,21 @@ class App:
             self.lock_button.configure(text="Range locked" if self.proc.locked else "Auto range")
         self.rotate_button.configure(text=f"Rotate {s.rotation}°")
         self.mirror_button.configure(text="Mirrored" if s.mirror else "Mirror off")
+        on = self.recorder is not None
+        self.record_button.configure(
+            text="Stop" if on else "Record", fg=RED if on else FG, activeforeground=RED if on else FG
+        )
         if self.smoothing.get() != s.smoothing:
             self.smoothing.set(s.smoothing)
 
     def drop_source(self) -> None:
+        """Stops the source, and the recording: no frame would come."""
+        if self.recorder is not None:
+            self.recorder.stop()
+            self.recorder = None
+        if self._photo.is_set():
+            self._photo.clear()
+            self.report("Photo failed: no frame")
         if self.source is not None:
             self.source.stop()
             self.source = None
@@ -232,6 +302,7 @@ class App:
                     self._errors.add(error)
                     print(f"tc001-mini-linux: {error}", file=sys.stderr)
                 self.photo.blank()  # stale temperatures must not pass for live ones
+                self._label_controls()
                 self._show_readouts(None)
                 self._fps_frames = 0
                 self.message.configure(text=f"{DISCONNECTED}\n{error}" if error else DISCONNECTED)
@@ -246,13 +317,25 @@ class App:
                     self._fps_at, self._fps_frames = now, 0
             case Step.OK:
                 pass
+        if self._photo.is_set() and now - self._photo_at >= PHOTO_WAIT:
+            self._photo_at = math.inf  # once per photo
+            self.report("Photo: waiting for a frame")
+        if self.recorder is not None and self.recorder.stopped:  # ffmpeg ended by itself
+            self.recorder = None
+            self._label_controls()
+        while not self._statuses.empty():
+            self.status.configure(text=self._statuses.get())
+            self._status_until = now + STATUS_SECONDS
+        if self._status_until and now >= self._status_until:
+            self.status.configure(text="")
+            self._status_until = 0.0
         if self.debug and now - self._fps_at >= DEBUG_PERIOD:
             frames = self.source.frames if self.source else 0
             rejected = self.source.rejected if self.source else 0
             fps = (frames - self._fps_frames) / (now - self._fps_at)
             self.debug.configure(text=f"{fps:.1f} fps, rejected: {rejected}, ui {self._ui_ms:.1f} ms")
             self._fps_at, self._fps_frames = now, frames
-        self.root.after(TICK_MS, self._tick)
+        self._tick_id = self.root.after(TICK_MS, self._tick)
 
     def _show_readouts(self, shot: Shot | None) -> None:
         r = shot.readouts if shot else None
@@ -266,6 +349,7 @@ class App:
     def quit(self) -> None:
         self._flush()
         self.drop_source()
+        self.root.after_cancel(self._tick_id)  # a tick firing after destroy() prints "invalid command name"
         self.root.destroy()
 
 
@@ -288,7 +372,8 @@ def run(
     def quit_soon(*_: object) -> None:
         app.request_quit()
 
-    previous = {sig: signal.signal(sig, quit_soon) for sig in (signal.SIGINT, signal.SIGTERM)}
+    # SIGHUP: the terminal closed; quitting cleanly finalises a recording.
+    previous = {sig: signal.signal(sig, quit_soon) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
         root.mainloop()
     finally:

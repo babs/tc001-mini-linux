@@ -14,7 +14,7 @@ from tc001_linux.render import PALETTES
 ROTATIONS = (0, 90, 180, 270)
 SMOOTH_STEP = 0.1
 
-# Lower-cased Tk keysyms; P / R stay inert until photo and video exist (phase 3).
+# Lower-cased Tk keysyms.
 KEYS = {
     "p": "photo",
     "r": "record",

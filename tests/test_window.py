@@ -1,5 +1,6 @@
 """Window smoke test on a private Xvfb; skipped without Xvfb locally, failed without it in CI (001-AC9)."""
 
+import gc
 import itertools
 import json
 import os
@@ -8,19 +9,27 @@ import signal
 import subprocess
 import sys
 import time
-import tkinter
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from tc001_linux import settings as cfg
+from tc001_linux.capture import capture_name
 from tc001_linux.frame import FRAME, parse
 from tc001_linux.picture import BAR_MARGIN, BAR_TOP, BAR_WIDTH, WIDTH, bar_row, format_celsius, readout_panel
 from tc001_linux.settings import Settings
 from tc001_linux.source import CameraSource, OnFrame, ReplaySource, Source
 
-from .conftest import CAPTURE, fake_v4l2
+from .conftest import CAPTURE, decode_png, fake_exe, fake_v4l2, ffprobe, png_chunks
+
+try:
+    import tkinter
+except ImportError:
+    if os.environ.get("CI"):
+        raise
+    pytest.skip("no tkinter: install python3-tk, the system Python's Tk", allow_module_level=True)
 
 
 @pytest.fixture(scope="session")
@@ -46,8 +55,11 @@ def x_server() -> Iterator[str]:
 
 
 @pytest.fixture
-def xvfb(x_server: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def xvfb(x_server: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("DISPLAY", x_server)
+    yield
+    # A test's Tk images die here, on the main thread: collected later on a reader thread, Tk refuses.
+    gc.collect()
 
 
 def pump(root: tkinter.Tk, cond: Callable[[], bool], timeout: float = 10.0) -> None:
@@ -410,14 +422,18 @@ def test_run_stops_the_source_when_the_loop_ends(
 
     try:
         run(connect, Settings(), tmp_path / "settings.json")
-        assert [sig for sig, _ in calls[:2]] == [signal.SIGINT, signal.SIGTERM]
-        assert calls[2:] == [(sig, f"previous {sig}") for sig in (signal.SIGINT, signal.SIGTERM)]  # restored
+        sigs = [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]
+        assert [sig for sig, _ in calls[:3]] == sigs
+        assert calls[3:] == [(sig, f"previous {sig}") for sig in sigs]  # restored
         assert len(opened) == 1 and not opened[0].alive
     finally:
         for src in opened:
             src.stop()
-        if tkinter._default_root is not None:  # type: ignore[attr-defined]
-            tkinter._default_root.destroy()  # type: ignore[attr-defined]
+        root = tkinter._default_root  # type: ignore[attr-defined]
+        if root is not None:
+            for pending in root.tk.splitlist(root.tk.call("after", "info")):
+                root.after_cancel(pending)  # the tick App.quit() would have cancelled
+            root.destroy()
 
 
 def test_sigterm_quits_cleanly_001_AC8(
@@ -455,3 +471,356 @@ def test_sigterm_quits_cleanly_001_AC8(
             app.wait(5)
         if child is not None and os.path.exists(f"/proc/{child}"):
             os.kill(child, signal.SIGKILL)
+
+
+def video_check(path: Path, wall: float) -> None:
+    """Playable H.264 768x832 at 25 fps, no audio, as long as the recording within 1 s."""
+    info = ffprobe(path)
+    streams = info["streams"]
+    assert isinstance(streams, list) and [s["codec_type"] for s in streams] == ["video"]
+    v = streams[0]
+    assert (v["codec_name"], v["width"], v["height"], v["avg_frame_rate"]) == ("h264", 768, 832, "25/1")
+    duration = float(info["format"]["duration"])  # type: ignore[index]
+    assert abs(duration - wall) < 1.0, (duration, wall)
+
+
+def saved(app: object, root: tkinter.Tk, prefix: str, timeout: float = 15) -> str:
+    """Waits for a status line starting with `prefix`; returns the rest."""
+    status = app.status  # type: ignore[attr-defined]
+    pump(root, lambda: str(status.cget("text")).startswith(prefix), timeout)
+    return str(status.cget("text")).removeprefix(prefix)
+
+
+def test_photo_001_AC6(xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tc001_linux import window
+    from tc001_linux.window import App, Shot
+
+    monkeypatch.setenv("XDG_PICTURES_DIR", str(tmp_path / "pics"))
+    monkeypatch.setattr(window, "STATUS_SECONDS", 0.5)
+    root = tkinter.Tk()
+    s = Settings("black-hot", 90, True, 0.3)
+    app = App(root, replay, s, tmp_path / "settings.json")
+    shots: list[Shot] = []
+    put = app.mailbox.put
+
+    def spy(shot: Shot) -> None:
+        shots.append(shot)
+        put(shot)
+
+    monkeypatch.setattr(app.mailbox, "put", spy)
+    folder = tmp_path / "pics" / "TC001"
+    try:
+        pump(root, lambda: app.shown > 0)
+        root.focus_force()
+        root.update()
+        root.event_generate("<KeyPress>", keysym="p")
+        name = saved(app, root, "Photo saved: ")
+        assert sorted(p.name for p in folder.iterdir()) == [f"{name}.bin", f"{name}.png"]
+        png, raw = (folder / f"{name}.png").read_bytes(), (folder / f"{name}.bin").read_bytes()
+        capture = CAPTURE.read_bytes()
+        assert len(raw) == 18_568 and raw in {capture[i : i + FRAME] for i in range(0, len(capture), FRAME)}
+        img = decode_png(png)
+        assert img.shape == (832, 768, 3)
+        kind, text = png_chunks(png)[1]
+        keyword, _, body = text.partition(b"\0")
+        assert (kind, keyword) == (b"tEXt", b"tc001")
+        meta = json.loads(body.decode("latin-1"))
+        # The frame of the .bin: same picture, and its readouts are the JSON's.
+        frame = [sh for sh in shots if sh.raw == raw and pixels(sh.picture) == img.tobytes()]
+        assert frame, "no frame with this raw and this picture"
+        r = frame[0].readouts
+        assert meta == {
+            "min": float(format_celsius(r.min)),
+            "center": float(format_celsius(r.centre)),
+            "max": float(format_celsius(r.max)),
+            "lo": float(format_celsius(r.lo)),
+            "hi": float(format_celsius(r.hi)),
+            "palette": "black_hot",
+            "rotation": 90,
+            "mirror": True,
+            "smoothing": 0.3,
+            "locked": False,
+            "time": meta["time"],
+        }
+        ms = int(datetime.fromisoformat(meta["time"]).timestamp() * 1000 + 0.5)
+        assert capture_name(ms) == name
+        pump(root, lambda: app.status.cget("text") == "")  # the status line clears
+        app.photo_button.invoke()  # the button takes one too
+        second = saved(app, root, "Photo saved: ")
+        assert second != name and len(list(folder.iterdir())) == 4
+    finally:
+        app.quit()
+
+
+def test_photo_failure_leaves_nothing_001_AC6(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tc001_linux.window import App
+
+    (tmp_path / "file").touch()
+    monkeypatch.setenv("XDG_PICTURES_DIR", str(tmp_path / "file"))
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    try:
+        pump(root, lambda: app.shown > 0)
+        app.act("photo")
+        error = saved(app, root, "Photo failed: ")
+        assert "Not a directory" in error
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["file"]
+        assert f"Photo failed: {error}" in capsys.readouterr().err
+    finally:
+        app.quit()
+
+
+def start_recording(app: object, root: tkinter.Tk) -> float:
+    pump(root, lambda: app.shown > 0)  # type: ignore[attr-defined]
+    root.focus_force()
+    root.update()
+    root.event_generate("<KeyPress>", keysym="r")
+    from tc001_linux.window import RED
+
+    button = app.record_button  # type: ignore[attr-defined]
+    assert button.cget("text") == "Stop" and button.cget("fg") == RED
+    return time.monotonic()
+
+
+def test_record_stop_001_AC7(xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tc001_linux.capture import media_dir
+    from tc001_linux.window import App
+
+    monkeypatch.setenv("XDG_VIDEOS_DIR", str(tmp_path / "vids"))
+    resolved: list[str] = []
+
+    def counted(kind: str) -> Path:
+        resolved.append(kind)
+        return media_dir(kind)
+
+    monkeypatch.setattr("tc001_linux.window.media_dir", counted)
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    try:
+        t0 = start_recording(app, root)
+        rec = app.recorder
+        assert rec is not None
+        pump(root, lambda: time.monotonic() - t0 >= 4.0)
+        app.record_button.invoke()  # Stop
+        wall = time.monotonic() - t0
+        assert app.recorder is None and app.record_button.cget("text") == "Record"
+        assert app.record_button.cget("fg") == app.photo_button.cget("fg")
+        name = saved(app, root, "Video saved: ")
+        assert rec.path.name == name and list((tmp_path / "vids" / "TC001").iterdir()) == [rec.path]
+        video_check(rec.path, wall)
+        app.act("photo")
+        saved(app, root, "Photo saved: ")
+        assert resolved == ["PICTURES", "VIDEOS"]  # once, at start: xdg-user-dir never runs on a press
+    finally:
+        app.quit()
+
+
+def test_quit_finalises_the_recording_001_AC7(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tc001_linux.window import App
+
+    monkeypatch.setenv("XDG_VIDEOS_DIR", str(tmp_path))
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    t0 = start_recording(app, root)
+    rec = app.recorder
+    assert rec is not None
+    pump(root, lambda: time.monotonic() - t0 >= 2.0)
+    root.event_generate("<KeyPress>", keysym="q")
+    wall = time.monotonic() - t0
+    rec.join(15)
+    assert list((tmp_path / "TC001").iterdir()) == [rec.path]
+    video_check(rec.path, wall)
+
+
+def test_source_loss_finalises_the_recording_001_AC7(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tc001_linux.window import App
+
+    monkeypatch.setenv("XDG_VIDEOS_DIR", str(tmp_path / "vids"))
+    capture = tmp_path / "c.bin"
+    capture.write_bytes(CAPTURE.read_bytes())
+    sources: list[ReplaySource] = []
+
+    def connect(on_frame: OnFrame) -> ReplaySource | None:
+        if not capture.exists():
+            return None
+        sources.append(ReplaySource(capture, on_frame))
+        return sources[-1]
+
+    root = tkinter.Tk()
+    app = App(root, connect, Settings(), tmp_path / "settings.json")
+    try:
+        t0 = start_recording(app, root)
+        rec = app.recorder
+        assert rec is not None
+        pump(root, lambda: time.monotonic() - t0 >= 2.0)
+        capture.unlink()
+        sources[-1].stop()  # the camera goes
+        wall = time.monotonic() - t0
+        pump(root, lambda: app.source is None)
+        assert app.recorder is None and app.record_button.cget("text") == "Record"
+        app.act("record")  # nothing to record without a source
+        app.act("photo")
+        assert app.recorder is None and not app._photo.is_set()
+        saved(app, root, "Video saved: ")
+        video_check(rec.path, wall)  # stops at the last frame; the stall detection adds no time
+    finally:
+        app.quit()
+
+
+def test_ffmpeg_failure_resets_the_button_001_AC7(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tc001_linux.window import App
+
+    monkeypatch.setenv("XDG_VIDEOS_DIR", str(tmp_path / "vids"))
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    try:
+        pump(root, lambda: app.shown > 0)
+        fake_exe(tmp_path, monkeypatch, "ffmpeg", "echo 'Unknown encoder libx264' >&2; exit 1")
+        app.act("record")
+        assert saved(app, root, "Video failed: ") == "Unknown encoder libx264"
+        pump(root, lambda: app.record_button.cget("text") == "Record")
+        assert app.recorder is None
+        app.videos = tmp_path / "settings.json" / "x" / "TC001"
+        (tmp_path / "settings.json").touch()
+        app.status.configure(text="")
+        app.act("record")  # the folder cannot be made
+        assert "Not a directory" in saved(app, root, "Video failed: ")
+        assert app.recorder is None and app.record_button.cget("text") == "Record"
+    finally:
+        app.quit()
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_signal_finalises_the_recording_001_AC7(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sig: signal.Signals
+) -> None:
+    """run() with its signal handlers: R, then SIGTERM / SIGHUP to the process; the video is saved."""
+    from tc001_linux.window import run
+
+    monkeypatch.setenv("XDG_VIDEOS_DIR", str(tmp_path))
+    times: list[float] = []
+    opened: list[Source] = []
+
+    def connect(on_frame: OnFrame) -> Source:
+        root = tkinter._default_root  # type: ignore[attr-defined]
+
+        def record() -> None:
+            root.focus_force()
+            root.event_generate("<KeyPress>", keysym="r")
+            times.append(time.monotonic())
+
+        def term() -> None:
+            times.append(time.monotonic())
+            os.kill(os.getpid(), sig)
+
+        root.after(300, record)
+        root.after(2300, term)
+        opened.append(ReplaySource(CAPTURE, on_frame))
+        return opened[-1]
+
+    try:
+        run(connect, Settings(), tmp_path / "settings.json")
+    finally:
+        for src in opened:
+            src.stop()
+    folder = tmp_path / "TC001"
+    end = time.monotonic() + 15
+    while not (videos := list(folder.glob("TC001_*.mp4"))):
+        assert time.monotonic() < end, "no video"
+        time.sleep(0.05)
+    assert list(folder.iterdir()) == videos
+    video_check(videos[0], times[1] - times[0])
+
+
+def test_xft_fonts_001_AC11(xvfb: None) -> None:
+    """The project runs on the system Python, whose Tk draws anti-aliased (Xft) fonts; uv's builds do not."""
+    root = tkinter.Tk()
+    try:
+        assert root.tk.call("::tk::pkgconfig", "get", "fontsystem") == "xft"
+    finally:
+        root.destroy()
+
+
+def test_quit_leaves_no_pending_tick(xvfb: None, tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    from tc001_linux.window import App
+
+    root = tkinter.Tk()
+    App(root, replay, Settings(), tmp_path / "settings.json").quit()
+    other = tkinter.Tk()  # its event loop would run the destroyed window's tick
+    try:
+        end = time.monotonic() + 0.3
+        while time.monotonic() < end:
+            other.update()
+            time.sleep(0.01)
+    finally:
+        other.destroy()
+    assert "invalid command name" not in capfd.readouterr().err
+
+
+def test_photo_without_a_frame_says_so(xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No source: refused at once; a source that sends nothing: a wait line, then a failure on loss."""
+    from tc001_linux import window
+    from tc001_linux.window import App
+
+    monkeypatch.setattr(window, "PHOTO_WAIT", 0.2)
+
+    class Silent(Source):
+        def __init__(self, on_frame: OnFrame) -> None:
+            super().__init__(on_frame)
+            self._thread.start()
+
+        def _run(self) -> None:
+            self._stop.wait()
+
+    sources: list[Source] = []
+
+    def connect(on_frame: OnFrame) -> Source | None:
+        sources.append(Silent(on_frame))
+        return sources[-1]
+
+    root = tkinter.Tk()
+    app = App(root, connect, Settings(), tmp_path / "settings.json")
+    try:
+        app.act("photo")  # before the first poll: no source yet
+        assert saved(app, root, "Photo failed: ", timeout=0.5) == "no frame"  # at once, not on a later loss
+        pump(root, lambda: app.source is not None)
+        app.act("photo")
+        assert saved(app, root, "Photo: ") == "waiting for a frame"
+        app.status.configure(text="")
+        pump(root, lambda: app.source is None)  # stalled 3 s: lost
+        assert saved(app, root, "Photo failed: ") == "no frame"
+        assert not list(tmp_path.glob("**/*.png"))
+    finally:
+        app.quit()
+
+
+def test_dead_stderr_keeps_the_status_001_AC6(
+    xvfb: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stderr gone (terminal closed): the photo is saved and the status line says so, once."""
+    from tc001_linux.window import App
+
+    class Dead:
+        def write(self, text: str) -> int:
+            raise OSError(5, "Input/output error")
+
+    root = tkinter.Tk()
+    app = App(root, replay, Settings(), tmp_path / "settings.json")
+    folder = tmp_path / "Pictures" / "TC001"  # conftest media_dirs
+    try:
+        pump(root, lambda: app.shown > 0)
+        monkeypatch.setattr(sys, "stderr", Dead())
+        app.act("photo")
+        name = saved(app, root, "Photo saved: ")
+        assert sorted(p.name for p in folder.iterdir()) == [f"{name}.bin", f"{name}.png"]
+        assert app._statuses.empty()  # no second, "failed" message behind it
+    finally:
+        app.quit()

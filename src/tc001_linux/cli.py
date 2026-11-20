@@ -11,6 +11,7 @@ from typing import BinaryIO
 
 from tc001_linux import Image
 from tc001_linux import settings as cfg
+from tc001_linux.capture import DEFAULT_DIRS, media_dir, sweep
 from tc001_linux.frame import frames, parse
 from tc001_linux.picture import compose
 from tc001_linux.png import write_png
@@ -121,5 +122,11 @@ def _window(args: argparse.Namespace) -> None:
         sys.exit("tc001-mini-linux: v4l2-ctl not found (install v4l-utils)")
     from tc001_linux.window import run  # Tk only when a window is asked for (001-AC9)
 
+    for kind in DEFAULT_DIRS:
+        recovered, discarded = sweep(media_dir(kind))
+        for name in recovered:
+            print(f"tc001-mini-linux: recovered {name}", file=sys.stderr)
+        for name in discarded:
+            print(f"tc001-mini-linux: discarded {name}", file=sys.stderr)
     path = cfg.path()
     run(_connect(args), _settings(args, cfg.load(path)), path, args.range, args.debug)

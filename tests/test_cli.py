@@ -1,5 +1,6 @@
 import io
 import os
+import struct
 import subprocess
 import sys
 import types
@@ -146,6 +147,24 @@ def window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setitem(sys.modules, "tc001_linux.window", fake)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     return got
+
+
+def test_window_start_sweeps_the_media_folders_001_AC7(
+    window: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    videos, pictures = tmp_path / "Videos" / "TC001", tmp_path / "Pictures" / "TC001"  # conftest media_dirs
+    videos.mkdir(parents=True)
+    pictures.mkdir(parents=True)
+    moov = struct.pack(">I", 8) + b"moov"
+    (videos / ".TC001_x.mp4.part").write_bytes(moov)
+    (pictures / ".TC001_y.png.part").write_bytes(b"png")
+    main(["--file", str(CAPTURE)])
+    assert list(videos.iterdir()) == [videos / "TC001_x.mp4"] and list(pictures.iterdir()) == []
+    err = capsys.readouterr().err
+    assert (
+        "tc001-mini-linux: recovered TC001_x.mp4" in err
+        and "tc001-mini-linux: discarded .TC001_y.png.part" in err
+    )
 
 
 def test_window_gets_saved_settings_and_overrides_001_AC5(window: dict[str, Any], tmp_path: Path) -> None:

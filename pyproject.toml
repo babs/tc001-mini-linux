@@ -15,6 +15,10 @@ tc001-mini-linux = "tc001_linux.cli:main"
 requires = ["uv_build>=0.10,<0.11"]
 build-backend = "uv_build"
 
+[tool.uv]
+# The system Python's Tk is built with Xft (anti-aliased fonts); uv's managed builds are not.
+python-preference = "only-system"
+
 [tool.uv.build-backend]
 module-name = "tc001_linux"
 
@@ -42,3 +46,8 @@ warn_return_any = true
 addopts = "-v --tb=short --strict-markers"
 timeout = 60  # a hung subprocess or Tk loop fails the test instead of the run
 testpaths = ["tests"]
+# An exception in a thread or a destructor (a Tk object freed off the Tk thread) fails the run.
+filterwarnings = [
+    "error::pytest.PytestUnraisableExceptionWarning",
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+]

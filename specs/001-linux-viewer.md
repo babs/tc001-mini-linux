@@ -30,13 +30,13 @@ A small desktop app: plug the camera in, run `tc001-mini-linux`, and a window sh
 The README carries this section as is, one line per item.
 
 Prerequisites:
-- System packages: `sudo apt install v4l-utils ffmpeg fonts-dejavu-core`
-- uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (provides Python 3.14 with Tk)
+- System packages: `sudo apt install python3-tk v4l-utils ffmpeg fonts-dejavu-core`
+- uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (the project runs on the system Python 3.14 and its Tk)
 - Camera access without root: `sudo usermod -aG video "$USER"`, then log out and back in
 - Check the camera is seen: `v4l2-ctl --list-devices | grep -A3 -i camera`
 
 Install and run:
-- Install from a clone: `uv tool install .`
+- Install from a clone: `uv tool install --python-preference only-system .`
 - Run on the camera: `tc001-mini-linux`
 - Pick the device: `tc001-mini-linux --device /dev/video2`
 - Replay a capture: `tc001-mini-linux --file capture.bin`
@@ -73,6 +73,7 @@ Files:
 - [ ] **AC8** Unplugging the camera shows "Camera disconnected" without crashing; plugging it back resumes the view within 5 s.
 - [ ] **AC9** `--file <capture>` replays a capture so the whole UI works without a camera; the unit tests and a headless render check run in CI without a display.
 - [ ] **AC10** The README holds the Usage section above, one line per item, and every command in it works as written on a fresh clone (checked by running each one).
+- [ ] **AC11** Buttons, slider and texts use an anti-aliased font in a dark theme; the window can be resized, the picture and the readouts scale with it and keep their proportions, and photos and videos stay 768 x 832.
 
 ## Phases
 
@@ -94,6 +95,12 @@ Files:
 - **Data model impact**: none
 - **DoD**: photo and video checked with `exiftool`, `ffprobe`; unplug during recording leaves a playable file.
 
+### Phase 4 — Window polish
+- Work: run on the system Python (Tk built with Xft) through uv, ttk widgets with a dark theme and DejaVu Sans, resizable window with the picture and readouts scaled to fit (aspect kept, captures unchanged).
+- **Covers**: AC11
+- **Data model impact**: none
+- **DoD**: gates green; screenshots of the window at two sizes on the real display; a photo and a video taken from a resized window are still 768 x 832.
+
 ## Data model impact (summary)
 
 None, besides the settings JSON file.
@@ -105,6 +112,7 @@ None, besides the settings JSON file.
 ## Decisions
 
 - `scripts/live_view.py` (the ffplay proof of concept) stays as the zero-install fallback once this ships (user choice).
-- Tk over Qt / GTK: in the standard library (Tk 8.6 verified in uv's Python 3.14 and the system Python), real buttons and shortcuts, no 200 MB dependency.
+- Tk over Qt / GTK: in the standard library, real buttons and shortcuts, no 200 MB dependency.
+- System Python rather than uv's managed Python: uv's Tk 8.6.14 lacks Xft (47 X core fonts, no anti-aliasing), the distribution's `python3-tk` (Tk 8.6.17) links libXft and sees DejaVu (user found the managed build's fonts unacceptable).
 - Camera through `uvcvideo` + `v4l2-ctl` rather than raw USB like Android: the Linux kernel driver already frames the stream and needs no extra permission beyond the `video` group.
 - Same picture, readouts, colours and file formats as the Android app so photos from both are interchangeable.
