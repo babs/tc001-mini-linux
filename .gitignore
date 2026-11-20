@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+dist/
+.scratchpad/
+*.annotations.json5
+*.annotations.d/
+*.annotations.ready
