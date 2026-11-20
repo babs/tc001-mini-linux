@@ -16,3 +16,16 @@ def test_readme_usage_is_the_spec_usage_001_AC10() -> None:
     spec = section(ROOT / "specs" / "001-linux-viewer.md", "## Usage (README content)")
     readme = section(ROOT / "README.md", "## Usage")
     assert spec and readme == spec
+
+
+def test_spec_status_matches_the_index_001_AC10() -> None:
+    spec = (ROOT / "specs" / "001-linux-viewer.md").read_text()
+    status = (
+        next(line for line in spec.splitlines() if line.startswith("**Status**:")).split(":", 1)[1].strip()
+    )
+    row = next(
+        line
+        for line in (ROOT / "specs" / "README.md").read_text().splitlines()
+        if "001-linux-viewer.md" in line
+    )
+    assert row.rstrip(" |").rsplit("|", 1)[1].strip() == status

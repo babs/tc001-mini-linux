@@ -1,12 +1,13 @@
 # 001 — TC001 Mini Linux viewer
 
-**Status**: in progress
+**Status**: shipped
+**Pending**: a physical unplug of the camera (AC7 unplug part, AC8); the disconnect path is covered by tests with a killed `v4l2-ctl`.
 **Requested by**: babs
 **Date**: 2026-11-20
 
 ## Problem
 
-On Linux the only way to look through the TC001 Mini is `scripts/live_view.py`, a proof of concept outside any repository: an `ffplay` window with no buttons, no photo or video, settings only as command-line flags. The Android app [tc001-mini-android](https://github.com/babs/tc001-mini-android) has the interface the owner wants; the desktop has nothing comparable.
+On Linux the only way to look through the TC001 Mini was a private proof-of-concept script (not published): an `ffplay` window with no buttons, no photo or video, settings only as command-line flags. The Android app [tc001-mini-android](https://github.com/babs/tc001-mini-android) has the interface the owner wants; the desktop has nothing comparable.
 
 ## Solution
 
@@ -30,7 +31,8 @@ A small desktop app: plug the camera in, run `tc001-mini-linux`, and a window sh
 The README carries this section as is, one line per item.
 
 Prerequisites:
-- System packages: `sudo apt install python3-tk v4l-utils ffmpeg fonts-dejavu-core`
+- A distribution whose `python3` is 3.14 or newer (e.g. Ubuntu 26.04)
+- System packages: `sudo apt install python3-tk v4l-utils ffmpeg fonts-dejavu-core libimage-exiftool-perl`
 - uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (the project runs on the system Python 3.14 and its Tk)
 - Camera access without root: `sudo usermod -aG video "$USER"`, then log out and back in
 - Check the camera is seen: `v4l2-ctl --list-devices | grep -A3 -i camera`
@@ -55,7 +57,6 @@ Files:
 ## Out of scope
 
 - Packaging beyond `uv tool install` (no .deb, Flatpak, AppImage).
-- Publishing: the repository stays local while this is a proof of concept.
 - Windows and macOS.
 - Emissivity / distance / ambient corrections (XU mailbox protocol not decoded).
 - Other TOPDON models, other stream modes.
@@ -63,17 +64,17 @@ Files:
 
 ## Acceptance criteria
 
-- [ ] **AC1** With the camera plugged in and the user in the `video` group, `tc001-mini-linux` shows the live image within 3 s at about 25 fps, with no root and no udev rule.
-- [ ] **AC2** Temperatures equal `raw/64 - 50`: unit test on the bundled capture (frame 0 min / max / mean 22.70 / 23.69 / 23.04 °C ± 0.01).
-- [ ] **AC3** The picture is 768 x 832 with the layout and colours of the Android app's spec 002 AC1; for the bundled capture it shows the same layout, marker positions and values as the Android rendering of the same frame and settings (not pixel identical: fonts and edge clipping may differ).
-- [ ] **AC4** Min, Max and Center in the window equal the cold marker, hot marker and centre badge values of the same frame; Center is larger than Min / Max.
-- [ ] **AC5** Every control and its shortcut changes the view on the next frame; palette, rotation, mirror and smoothing survive a restart; lock range freezes the scale labels and colours.
-- [ ] **AC6** Photo (button or shortcut) writes the PNG (768 x 832, `tEXt` `tc001` JSON with the Android field set) and the 18,568-byte `.bin` of the same frame; `exiftool -Tc001` reads the JSON.
+- [x] **AC1** With the camera plugged in and the user in the `video` group, `tc001-mini-linux` shows the live image within 3 s at about 25 fps, with no root and no udev rule.
+- [x] **AC2** Temperatures equal `raw/64 - 50`: unit test on the bundled capture (frame 0 min / max / mean 22.70 / 23.69 / 23.04 °C ± 0.01).
+- [x] **AC3** The picture is 768 x 832 with the layout and colours of the Android app's spec 002 AC1; for the bundled capture it shows the same layout, marker positions and values as the Android rendering of the same frame and settings (not pixel identical: fonts and edge clipping may differ).
+- [x] **AC4** Min, Max and Center in the window equal the cold marker, hot marker and centre badge values of the same frame; Center is larger than Min / Max.
+- [x] **AC5** Every control and its shortcut changes the view on the next frame; palette, rotation, mirror and smoothing survive a restart; lock range freezes the scale labels and colours.
+- [x] **AC6** Photo (button or shortcut) writes the PNG (768 x 832, `tEXt` `tc001` JSON with the Android field set) and the 18,568-byte `.bin` of the same frame; `exiftool -Tc001` reads the JSON.
 - [ ] **AC7** Record / Stop writes a playable H.264 MP4 at 768 x 832, ~25 fps, duration within 1 s of the recording; closing the window or unplugging the camera finalises it.
 - [ ] **AC8** Unplugging the camera shows "Camera disconnected" without crashing; plugging it back resumes the view within 5 s.
-- [ ] **AC9** `--file <capture>` replays a capture so the whole UI works without a camera; the unit tests and a headless render check run in CI without a display.
-- [ ] **AC10** The README holds the Usage section above, one line per item, and every command in it works as written on a fresh clone (checked by running each one).
-- [ ] **AC11** Buttons, slider and texts use an anti-aliased font in a dark theme; the window can be resized, the picture and the readouts scale with it and keep their proportions, and photos and videos stay 768 x 832.
+- [x] **AC9** `--file <capture>` replays a capture so the whole UI works without a camera; the unit tests and a headless render check run in CI without a display.
+- [x] **AC10** The README holds the Usage section above, one line per item, and every command in it works as written on a fresh clone (checked by running each one).
+- [x] **AC11** Buttons, slider and texts use an anti-aliased font in a dark theme; the window can be resized, the picture and the readouts scale with it and keep their proportions, and photos and videos stay 768 x 832.
 
 ## Phases
 
@@ -111,8 +112,9 @@ None, besides the settings JSON file.
 
 ## Decisions
 
-- `scripts/live_view.py` (the ffplay proof of concept) stays as the zero-install fallback once this ships (user choice).
+- The private ffplay proof of concept stays as the owner's zero-install fallback; it is not part of this repository (user choice).
 - Tk over Qt / GTK: in the standard library, real buttons and shortcuts, no 200 MB dependency.
+- Published as `babs/tc001-mini-linux` (public, MIT, CI on GitHub Actions) once phase 4 landed (user choice).
 - System Python rather than uv's managed Python: uv's Tk 8.6.14 lacks Xft (47 X core fonts, no anti-aliasing), the distribution's `python3-tk` (Tk 8.6.17) links libXft and sees DejaVu (user found the managed build's fonts unacceptable).
 - Camera through `uvcvideo` + `v4l2-ctl` rather than raw USB like Android: the Linux kernel driver already frames the stream and needs no extra permission beyond the `video` group.
 - Same picture, readouts, colours and file formats as the Android app so photos from both are interchangeable.

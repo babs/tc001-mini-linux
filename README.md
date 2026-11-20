@@ -4,12 +4,13 @@ A desktop viewer for the TOPDON TC001 Mini thermal camera on Linux, with no vend
 
 ## Status
 
-Proof of concept, kept local. Live view, controls, saved settings, photo and video work, in a resizable dark window. The plan and acceptance criteria are in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
+Proof of concept. Live view, controls, saved settings, photo and video work, in a resizable dark window. The plan and acceptance criteria are in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
 
 ## Usage
 
 Prerequisites:
-- System packages: `sudo apt install python3-tk v4l-utils ffmpeg fonts-dejavu-core`
+- A distribution whose `python3` is 3.14 or newer (e.g. Ubuntu 26.04)
+- System packages: `sudo apt install python3-tk v4l-utils ffmpeg fonts-dejavu-core libimage-exiftool-perl`
 - uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (the project runs on the system Python 3.14 and its Tk)
 - Camera access without root: `sudo usermod -aG video "$USER"`, then log out and back in
 - Check the camera is seen: `v4l2-ctl --list-devices | grep -A3 -i camera`

@@ -2,4 +2,4 @@
 
 | # | Feature | Status |
 |---|---|---|
-| [001](001-linux-viewer.md) | TC001 Mini Linux viewer | in progress |
+| [001](001-linux-viewer.md) | TC001 Mini Linux viewer | shipped |
