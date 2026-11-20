@@ -10,7 +10,7 @@ import numpy as np
 from tc001_linux import Color, Image, Plane
 
 FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")
-CHARS = "0123456789.-°C"
+CHARS = "0123456789.-°CMinaxetr"  # digits and units, then the window's Min / Max / Center
 # DejaVu Sans Mono metrics in font units per em (hhea ascender / descender, advance width).
 UNITS, ASCENDER, DESCENDER, ADVANCE = 2048, 1901, 483, 1233
 FFMPEG_TIMEOUT = 30.0

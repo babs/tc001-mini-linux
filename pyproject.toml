@@ -20,7 +20,8 @@ module-name = "tc001_linux"
 
 [dependency-groups]
 dev = [
-    "pytest>=9", "pytest-cov>=7", "mypy>=2", "ruff>=0.16", "pre-commit>=4.6", "detect-secrets>=1.5",
+    "pytest>=9", "pytest-cov>=7", "pytest-timeout>=2.4", "mypy>=2", "ruff>=0.16", "pre-commit>=4.6",
+    "detect-secrets>=1.5",
 ]
 
 [tool.ruff]
@@ -39,4 +40,5 @@ warn_return_any = true
 
 [tool.pytest.ini_options]
 addopts = "-v --tb=short --strict-markers"
+timeout = 60  # a hung subprocess or Tk loop fails the test instead of the run
 testpaths = ["tests"]

@@ -2,7 +2,7 @@
 
 import struct
 from collections.abc import Iterator
-from typing import BinaryIO
+from typing import Protocol
 
 import numpy as np
 
@@ -14,6 +14,10 @@ FRAME = HEADER + SIZE * SIZE * 2  # 18568 bytes
 MAGIC, MARKER = 0x70827773, 0xAABBCCDD
 _MAGIC_BYTES = struct.pack("<I", MAGIC)
 _MARKER_BYTES = struct.pack("<I", MARKER)
+
+
+class Readable(Protocol):
+    def read(self, size: int, /) -> bytes: ...
 
 
 def parse(frame: bytes) -> Plane | None:
@@ -34,7 +38,7 @@ def _next_start(buf: bytes) -> int:
     return i
 
 
-def frames(stream: BinaryIO) -> Iterator[bytes]:
+def frames(stream: Readable) -> Iterator[bytes]:
     """FRAME-sized chunks of `stream` that start with the magic, resyncing after junk or a short frame."""
     buf = b""
     while chunk := stream.read(FRAME - len(buf)):

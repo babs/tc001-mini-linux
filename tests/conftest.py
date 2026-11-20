@@ -1,3 +1,5 @@
+import os
+import stat
 import struct
 import zlib
 from collections.abc import Iterator
@@ -48,3 +50,11 @@ def decode_png(data: bytes) -> Image:
     rows = np.frombuffer(zlib.decompress(chunks[b"IDAT"]), np.uint8).reshape(h, 1 + 3 * w)
     assert not rows[:, 0].any()
     return rows[:, 1:].reshape(h, w, 3)
+
+
+def fake_v4l2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    exe = tmp_path / "bin" / "v4l2-ctl"
+    exe.parent.mkdir(exist_ok=True)
+    exe.write_text(f"#!/bin/sh\n{body}\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{exe.parent}{os.pathsep}{os.environ['PATH']}")

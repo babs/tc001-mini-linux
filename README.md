@@ -2,7 +2,7 @@
 
 A desktop viewer for the TOPDON TC001 Mini thermal camera on Linux. No vendor SDK, no network access. It mirrors the Android app [tc001-mini-android](https://github.com/babs/tc001-mini-android): same picture, same readouts, same files.
 
-**Status: phase 1 of 3.** Rendering a capture to a PNG works: `uv run tc001-mini-linux --file capture.bin --snapshot out.png`. The window, live camera, photo and video are coming; the plan is in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
+**Status: phase 2 of 3.** The window works on the live camera (`uv run tc001-mini-linux`) or a capture (`--file capture.bin`), with readouts, controls, shortcuts and saved settings; `--snapshot out.png` renders a capture headless. Photo and video are coming; the plan is in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
 
 ## What it will do
 
