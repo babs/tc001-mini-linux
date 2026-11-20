@@ -9,3 +9,4 @@ dist/
 *.annotations.json5
 *.annotations.d/
 *.annotations.ready
+.coverage

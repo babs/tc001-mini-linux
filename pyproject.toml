@@ -1,0 +1,42 @@
+[project]
+name = "tc001-mini-linux"
+version = "0.1.0"
+description = "Desktop viewer for the TOPDON TC001 Mini thermal camera on Linux"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = ["numpy>=2.3"]
+
+[project.scripts]
+tc001-mini-linux = "tc001_linux.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "tc001_linux"
+
+[dependency-groups]
+dev = [
+    "pytest>=9", "pytest-cov>=7", "mypy>=2", "ruff>=0.16", "pre-commit>=4.6", "detect-secrets>=1.5",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+
+[tool.mypy]
+strict = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+strict_optional = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+addopts = "-v --tb=short --strict-markers"
+testpaths = ["tests"]

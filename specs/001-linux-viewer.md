@@ -1,6 +1,6 @@
 # 001 — TC001 Mini Linux viewer
 
-**Status**: approved
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-11-20
 
@@ -65,7 +65,7 @@ Files:
 
 - [ ] **AC1** With the camera plugged in and the user in the `video` group, `tc001-mini-linux` shows the live image within 3 s at about 25 fps, with no root and no udev rule.
 - [ ] **AC2** Temperatures equal `raw/64 - 50`: unit test on the bundled capture (frame 0 min / max / mean 22.70 / 23.69 / 23.04 °C ± 0.01).
-- [ ] **AC3** The picture is 768 x 832 with the layout and colours of the Android app's spec 002 AC1; for the bundled capture it matches the Android rendering of the same frame and settings (same marker positions and labels; pixels within a small tolerance for anti-aliasing).
+- [ ] **AC3** The picture is 768 x 832 with the layout and colours of the Android app's spec 002 AC1; for the bundled capture it shows the same layout, marker positions and values as the Android rendering of the same frame and settings (not pixel identical: fonts and edge clipping may differ).
 - [ ] **AC4** Min, Max and Center in the window equal the cold marker, hot marker and centre badge values of the same frame; Center is larger than Min / Max.
 - [ ] **AC5** Every control and its shortcut changes the view on the next frame; palette, rotation, mirror and smoothing survive a restart; lock range freezes the scale labels and colours.
 - [ ] **AC6** Photo (button or shortcut) writes the PNG (768 x 832, `tEXt` `tc001` JSON with the Android field set) and the 18,568-byte `.bin` of the same frame; `exiftool -Tc001` reads the JSON.

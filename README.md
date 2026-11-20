@@ -2,7 +2,7 @@
 
 A desktop viewer for the TOPDON TC001 Mini thermal camera on Linux. No vendor SDK, no network access. It mirrors the Android app [tc001-mini-android](https://github.com/babs/tc001-mini-android): same picture, same readouts, same files.
 
-**Status: planned.** The behaviour to build is in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md); nothing is implemented yet.
+**Status: phase 1 of 3.** Rendering a capture to a PNG works: `uv run tc001-mini-linux --file capture.bin --snapshot out.png`. The window, live camera, photo and video are coming; the plan is in [`specs/001-linux-viewer.md`](specs/001-linux-viewer.md).
 
 ## What it will do
 
@@ -26,7 +26,8 @@ Reading the device needs no root when your user can open `/dev/videoN` (usually 
 
 - Linux with `uvcvideo` and `v4l2-ctl` (package `v4l-utils`).
 - Python 3.14 with Tk (`tkinter`), managed with [uv](https://docs.astral.sh/uv/).
-- `ffmpeg` for video recording.
+- `ffmpeg` to draw the labels (glyphs rendered once at startup) and to record video.
+- DejaVu Sans Mono for the labels (package `fonts-dejavu-core`).
 
 ## License
 
